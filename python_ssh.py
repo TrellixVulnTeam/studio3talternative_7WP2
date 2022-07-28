@@ -5,8 +5,11 @@ from zipfile import ZipFile
 from getpass import getpass
 import os
 from dotenv import load_dotenv
-
-
+from pymongo import MongoClient 
+import fileManagement
+import csv
+import xlsxwriter
+import pprint
 class ConnectAutomation:
 
     def __init__(self,value):
@@ -82,8 +85,7 @@ class ConnectAutomation:
             scp = SCPClient(c.get_transport(), progress4=self.progress4)
             scp.get('dump.zip')  
             print("\n")
-            # print("Enter your password")
-            # pwd = getpass()
+            
             self.unzip_folder("dump.zip","dump",self.password)
             os.system("mongo {} --eval 'db.dropDatabase()'".format(mongodb_database))
             db_command="mongorestore --db {} --verbose dump/dump/{}".format(mongodb_database,mongodb_database)
@@ -93,6 +95,119 @@ class ConnectAutomation:
             print("Something goes wrong {}".format(str(e)))
         finally:
             c.close()
+
+    def exportToXLSX(self):
+        try:
+            client = MongoClient("mongodb://localhost:27017/") 
+            mydatabase = client[os.environ.get('DATABASE_NAME')]
+            mycollection=mydatabase['newUsers']
+            agg_result= mycollection.aggregate([])
+            c=fileManagement.FileManagement(agg_result);
+            c.format_data()
+        except Exception as e:
+            print(e);
+        finally:
+            print("Exported")    
+
+
+    def  db_query(self):
+        try:
+            client = MongoClient("mongodb://localhost:27017/") 
+            mydatabase = client[os.environ.get('DATABASE_NAME')]
+            mycollection=mydatabase['properties']
+            agg_result= mycollection.aggregate([
+                        {
+                        "$lookup": {
+                            "from": "users",
+                            "localField": "currentTenant",
+                            "foreignField": "_id",
+                            "as": "currentTenant"
+                        }
+                        },
+                        {
+                        "$lookup": {
+                            "from": "users",
+                            "localField": "userId",
+                            "foreignField": "_id",
+                            "as": "landloard"
+                        }
+                        },
+                        {
+                        "$unwind": {
+                            "path": "$currentTenant",
+                            "preserveNullAndEmptyArrays": True
+                        }
+                        },
+                        {"$unwind":"$landloard"},
+                        {"$project":{
+                            "_id":1,
+                            "Address":{
+                            "$concat":[
+                                "unitNo: ","$address.unitNo", ", ",
+                                "buildingNo: ","$address.buildingNo", ", ",
+                                "roadNo: ","$address.roadNo", ", ",
+                                "blockNo: ","$address.blockNo", ", ",
+                                "city: ","$address.city", ", ",
+                                "country: ","$address.country"
+                            ]
+                            },
+                            "Property Registration Date":{ "$dateToString": { "format": "%Y-%m-%d", "date": "$createdAt" } },
+                            "Landlord Name":"$landloard.fullName",
+                            "Landlord Contact":"$landloard.fullNumber",
+                            "Property Name":"$propertyName",
+                            "Tenant Name":"$currentTenant.fullName",
+                            "Status":{
+                                "$cond": { "if": { "$eq": [ "$occupied", True ] }, "then": "Occupied", "else": "Vacant" }
+                            }
+                        }},
+                        {"$sort":{"_id":1}}
+            ]) 
+            with open('property.csv', 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["Property Name", "Address", "Property Registration Date","Landlord Name","Landlord Contact #","Status"])
+                for obj in agg_result:
+                    writer.writerow([obj["Property Name"], obj["Address"], obj["Property Registration Date"],obj["Landlord Name"],obj["Landlord Contact #"],obj["Status"]])
+        except Exception as e:
+            print(e)
+        finally:
+            print("Executed")   
+
+
+
+
+    def  db_query_users(self):
+        try:
+            client = MongoClient("mongodb://localhost:27017/") 
+            mydatabase = client[os.environ.get('DATABASE_NAME')]
+            mycollection=mydatabase['users']
+            agg_result= mycollection.aggregate([
+                {"$match":{"userType":{"$in":["MANAGER","LANDLORD"]}}},
+                {"$project":{
+                "name":"$fullName",
+                "type":{ "$cond": { "if": { "$eq": [ "$userType", "MANAGER" ] }, "then": "Company", "else": "Landlord" }},
+                "Joining Date":{ "$dateToString": { "format": "%Y-%m-%d", "date": "$createAt" } },
+                "Status":{ "$cond": { "if": { "$eq": [ "$isApproved", True ] }, "then": "Approved", "else": "Not Approved" }} 
+                }}
+                ]) 
+            with open('landlordmanager.csv', 'w', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(["name", "type", "Joining Date","Status"])
+                for obj in agg_result:
+                    writer.writerow([obj["name"], obj["type"], obj["Joining Date"],obj["Status"]])
+        except Exception as e:
+            print(e)
+        finally:
+            print("Executed")                
+
+        
+
+        
+
+cl=ConnectAutomation("Rajendra@123")
+cl.exportToXLSX()
+
+
        
+
 
 
